@@ -36,7 +36,11 @@
     <dependency>
       <groupId>org.slf4j</groupId>
       <artifactId>slf4j-nop</artifactId>
-      <version>2.0.13</version>
+      <!-- MESMA linha do slf4j-api que o JGit traz (1.7.x). O 2.x usa
+           ServiceLoader e o 1.7 procura org.slf4j.impl.StaticLoggerBinder: com
+           versões cruzadas o NOP não liga e o aviso aparece no console assim
+           mesmo — que foi exatamente o que aconteceu. -->
+      <version>1.7.36</version>
       <scope>runtime</scope>
     </dependency>
   </dependencies>

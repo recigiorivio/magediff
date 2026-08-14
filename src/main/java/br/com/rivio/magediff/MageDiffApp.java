@@ -80,6 +80,15 @@ public final class MageDiffApp extends JFrame {
   private int trailFrom = -1;
   private int trailTo = -1;
 
+  // ─── Modo Git ───
+  private final java.awt.CardLayout cards = new java.awt.CardLayout();
+  private final JPanel root = new JPanel(cards);
+  { root.setOpaque(true); }
+  private GitHeader gitHeader;
+  private ChangedFilesList filesList;
+  private GitRepo repo;
+  private String openPath;
+
   private MageDiffApp(TextFile left, TextFile right) {
     super("MageDiff");
     this.left = left;
@@ -108,7 +117,11 @@ public final class MageDiffApp extends JFrame {
       @Override
       public void eolChanged(DiffView.Side side, String eol) {
         (side == DiffView.Side.LEFT ? left : right).setEol(eol);
-        pathBar.update(left, right);
+        if (repo == null) {
+      pathBar.update(left, right);
+    } else {
+      gitHeader.repaint();
+    }
         refreshStatus();
       }
     });
@@ -142,18 +155,47 @@ public final class MageDiffApp extends JFrame {
     center.add(scroll, BorderLayout.CENTER);
     center.add(minimap, BorderLayout.EAST);
 
+    gitHeader = new GitHeader(view, view.palette(), new GitHeader.Listener() {
+      @Override
+      public void sidesChanged(GitRepo.Side from, GitRepo.Side to) {
+        refreshGitChanges();
+      }
+
+      @Override
+      public void chooseFolder() {
+        openGitFolder();
+      }
+    });
+    filesList = new ChangedFilesList(view.palette(), this::openGitFile);
+
+    JPanel diffCard = new JPanel(new BorderLayout());
+    diffCard.add(buildToolbar(), BorderLayout.NORTH);
+    diffCard.add(center, BorderLayout.CENTER);
+    diffCard.add(buildBottom(), BorderLayout.SOUTH);
+    diffCard.add(filesList, BorderLayout.WEST);
+    filesList.setVisible(false);
+
+    root.setBackground(view.palette().background());
+    root.add(new StartScreen(view.palette(), this::startFileMode, this::openGitFolder), "start");
+    root.add(diffCard, "diff");
+
     setJMenuBar(buildMenuBar());
     setLayout(new BorderLayout());
-    add(buildToolbar(), BorderLayout.NORTH);
-    add(center, BorderLayout.CENTER);
-    add(buildBottom(), BorderLayout.SOUTH);
+    add(root, BorderLayout.CENTER);
     installShortcuts();
 
     applyIcon();
     setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
     setSize(1280, 780);
     setLocationRelativeTo(null);
-    recompute();
+    // Com arquivos na linha de comando (ou arrastados no ícone), a tela inicial
+    // só atrasaria; sem eles, ela é a pergunta que falta responder.
+    if (left.loaded() || right.loaded()) {
+      startFileMode();
+    } else {
+      recompute();
+      showStart();
+    }
   }
 
   /**
@@ -261,6 +303,9 @@ public final class MageDiffApp extends JFrame {
     JMenuBar bar = new JMenuBar();
 
     JMenu file = new JMenu("Arquivo");
+    file.add(item("Tela inicial", KeyStroke.getKeyStroke(KeyEvent.VK_0, menu), this::showStart));
+    file.add(item("Comparar repositório Git…",
+        KeyStroke.getKeyStroke(KeyEvent.VK_G, menu), this::openGitFolder));
     file.add(item("Nova comparação", KeyStroke.getKeyStroke(KeyEvent.VK_N, menu),
         this::newComparison));
     file.addSeparator();
@@ -464,6 +509,14 @@ public final class MageDiffApp extends JFrame {
       return;
     }
     Hunk hunk = result.hunks().get(hunkIndex);
+    // O lado "revisão" do modo Git não tem arquivo em disco: copiar para ele
+    // mudaria só a memória e sumiria no próximo clique, dando a impressão de
+    // que o merge foi aplicado.
+    TextFile destination = toRight ? right : left;
+    if (destination.readOnly()) {
+      flash("Este lado é um commit — não dá para alterar. Copie para o outro lado.");
+      return;
+    }
     history.record(toRight ? "copiar para a direita" : "copiar para a esquerda", left, right);
     if (toRight) {
       Merge.toRight(hunk, left.lines(), right.lines());
@@ -672,6 +725,121 @@ public final class MageDiffApp extends JFrame {
 
   // ─── Arquivos ───────────────────────────────────────────────────────────
 
+  // ─── Modos ──────────────────────────────────────────────────────────────
+
+  /** Mostra a tela inicial (as duas opções). */
+  private void showStart() {
+    cards.show(root, "start");
+    setTitle("MageDiff");
+  }
+
+  /** Modo arquivo: a tela que já existia, com a barra de caminhos. */
+  private void startFileMode() {
+    closeRepo();
+    filesList.setVisible(false);
+    scroll.setColumnHeaderView(pathBar);
+    cards.show(root, "diff");
+    recompute();
+    revalidate();
+  }
+
+  /**
+   * Modo Git: escolhe a pasta, abre o repositório e lista o que difere.
+   * Aceita qualquer subpasta — o JGit sobe até achar o `.git`, como o próprio
+   * git faz, então não é preciso acertar a raiz.
+   */
+  private void openGitFolder() {
+    JFileChooser chooser = new JFileChooser();
+    chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
+    chooser.setDialogTitle("Escolher a pasta do repositório");
+    if (repo != null) {
+      chooser.setCurrentDirectory(repo.workTree().toFile());
+    }
+    if (chooser.showOpenDialog(this) != JFileChooser.APPROVE_OPTION) {
+      return;
+    }
+    openRepo(chooser.getSelectedFile().toPath());
+  }
+
+  /** Abre um repositório sem diálogo — usado pelo `--git <pasta>` e pelo teste
+   * visual, que não pode parar num seletor de arquivos. */
+  void openRepo(Path folder) {
+    try {
+      GitRepo opened = GitRepo.open(folder);
+      if (opened == null) {
+        JOptionPane.showMessageDialog(this,
+            "Não há repositório Git nesta pasta (nem acima dela).",
+            "Sem repositório", JOptionPane.WARNING_MESSAGE);
+        return;
+      }
+      closeRepo();
+      repo = opened;
+      filesList.setVisible(true);
+      scroll.setColumnHeaderView(gitHeader);
+      gitHeader.setRepo(repo.workTree() + "   ·   branch " + repo.currentBranch(),
+          repo.sides());
+      cards.show(root, "diff");
+      refreshGitChanges();
+      revalidate();
+    } catch (Exception e) {
+      JOptionPane.showMessageDialog(this, "Não foi possível abrir o repositório:\n"
+          + e.getMessage(), "Erro", JOptionPane.ERROR_MESSAGE);
+    }
+  }
+
+  /** Relista os arquivos que diferem entre os dois lados escolhidos. */
+  private void refreshGitChanges() {
+    if (repo == null) {
+      return;
+    }
+    try {
+      filesList.setFiles(repo.changes(gitHeader.from(), gitHeader.to()));
+      setTitle("MageDiff — " + repo.workTree().getFileName());
+    } catch (Exception e) {
+      JOptionPane.showMessageDialog(this, "Não foi possível comparar:\n" + e.getMessage(),
+          "Erro", JOptionPane.ERROR_MESSAGE);
+    }
+  }
+
+  /**
+   * Carrega os dois lados de um arquivo da lista. Lado sem o arquivo (adicionado
+   * ou removido) entra vazio — que é exatamente como o diff já representa "não
+   * existe deste lado".
+   */
+  private void openGitFile(GitRepo.ChangedFile file) {
+    if (repo == null) {
+      return;
+    }
+    try {
+      TextFile a = repo.file(gitHeader.from(), file.oldPath());
+      TextFile b = repo.file(gitHeader.to(), file.path());
+      // Lado onde o arquivo não existe entra vazio COM rótulo: "(sem arquivo)"
+      // não diz nada, "(não existe em HEAD)" explica o lado todo cinza.
+      left = a != null ? a : absent(gitHeader.from());
+      right = b != null ? b : absent(gitHeader.to());
+      history.clear();
+      view.clearSelection();
+      clearTrail();
+      recompute();
+    } catch (Exception e) {
+      JOptionPane.showMessageDialog(this, "Não foi possível ler o arquivo:\n" + e.getMessage(),
+          "Erro", JOptionPane.ERROR_MESSAGE);
+    }
+  }
+
+  /** Lado vazio e read-only, nomeado pelo lado a que pertence. */
+  private static TextFile absent(GitRepo.Side side) {
+    return TextFile.ofBytes(new byte[0], java.nio.charset.StandardCharsets.UTF_8,
+        "(não existe em " + side.label() + ")");
+  }
+
+  private void closeRepo() {
+    if (repo != null) {
+      repo.close();
+      repo = null;
+    }
+  }
+
   /** Arquivo solto: carrega no lado onde caiu. */
   private void dropFile(DiffView.Side side, Path path) {
     loadPath(side, path.toString());
@@ -804,6 +972,10 @@ public final class MageDiffApp extends JFrame {
 
   private void save(boolean isLeft) {
     TextFile target = isLeft ? left : right;
+    if (target.readOnly()) {
+      flash("Este lado é um commit — não há onde gravar.");
+      return;
+    }
     Path destination = target.path();
     // Lado sem arquivo (veio de "Nova comparação") precisa de destino: salvar
     // vira salvar-como em vez de não fazer nada em silêncio.
@@ -833,13 +1005,17 @@ public final class MageDiffApp extends JFrame {
   public static void main(String[] args) throws Exception {
     List<String> files = new ArrayList<>();
     String renderTo = null;
+    String gitFolder = null;
     for (int i = 0; i < args.length; i++) {
       if ("--render".equals(args[i]) && i + 1 < args.length) {
         renderTo = args[++i];
+      } else if ("--git".equals(args[i]) && i + 1 < args.length) {
+        gitFolder = args[++i];
       } else {
         files.add(args[i]);
       }
     }
+    final String repoFolder = gitFolder;
 
     TextFile left = load(files, 0);
     TextFile right = load(files, 1);
@@ -850,7 +1026,7 @@ public final class MageDiffApp extends JFrame {
       if (java.awt.GraphicsEnvironment.isHeadless()) {
         renderToPng(left, right, Path.of(renderTo));
       } else {
-        renderWindowToPng(left, right, Path.of(renderTo), 1320, 660);
+        renderWindowToPng(left, right, Path.of(renderTo), 1320, 660, repoFolder);
       }
       System.exit(0);
     }
@@ -866,7 +1042,11 @@ public final class MageDiffApp extends JFrame {
       } catch (Exception ignored) {
         // LAF padrão serve; não é motivo para não abrir.
       }
-      new MageDiffApp(left, right).setVisible(true);
+      MageDiffApp app = new MageDiffApp(left, right);
+      if (repoFolder != null) {
+        app.openRepo(Path.of(repoFolder));
+      }
+      app.setVisible(true);
     });
   }
 
@@ -902,7 +1082,7 @@ public final class MageDiffApp extends JFrame {
    * revisar espaçamento e estado dos botões sem depender de screenshot manual.
    */
   private static void renderWindowToPng(TextFile left, TextFile right, Path out, int width,
-      int height) throws Exception {
+      int height, String repoFolder) throws Exception {
     final BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
     SwingUtilities.invokeAndWait(() -> {
       try {
@@ -911,6 +1091,9 @@ public final class MageDiffApp extends JFrame {
         // irrelevante para o render
       }
       MageDiffApp app = new MageDiffApp(left, right);
+      if (repoFolder != null) {
+        app.openRepo(Path.of(repoFolder));
+      }
       app.setSize(width, height);
       app.addNotify();
       app.validate();
@@ -919,7 +1102,10 @@ public final class MageDiffApp extends JFrame {
       }
       app.validate();
       Graphics2D g = image.createGraphics();
-      app.getContentPane().paint(g);
+      // Root pane, não content pane: o content pane exclui a barra de menus, e a
+      // faixa que sobrava embaixo do PNG parecia defeito da tela sendo defeito
+      // do render.
+      app.getRootPane().paint(g);
       g.dispose();
       app.dispose();
     });

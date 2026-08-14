@@ -32,7 +32,7 @@ public final class Icons {
     CLIPBOARD_COPY, CLIPBOARD_PASTE,
     SWAP, RELOAD,
     SAVE_LEFT, SAVE_RIGHT, SAVE,
-    COLLAPSE, WHITESPACE
+    COLLAPSE, WHITESPACE, BRANCH, TWO_FILES
   }
 
   private Icons() {
@@ -70,6 +70,8 @@ public final class Icons {
       case SAVE -> floppy(g);
       case COLLAPSE -> collapse(g);
       case WHITESPACE -> whitespace(g);
+      case BRANCH -> branch(g);
+      case TWO_FILES -> twoFiles(g);
     }
   }
 
@@ -210,6 +212,30 @@ public final class Icons {
     for (double x = 3; x < 13; x += 3) {
       g.draw(new java.awt.geom.Line2D.Double(x, 8, x + 1.6, 8));
     }
+  }
+
+  /** Dois pontos numa linha e um terceiro derivando: o desenho de branch que
+   * todo cliente de git usa. */
+  private static void branch(Graphics2D g) {
+    g.draw(new java.awt.geom.Line2D.Double(4.5, 3, 4.5, 13));
+    g.fill(new java.awt.geom.Ellipse2D.Double(2.6, 1.4, 3.8, 3.8));
+    g.fill(new java.awt.geom.Ellipse2D.Double(2.6, 11, 3.8, 3.8));
+    g.fill(new java.awt.geom.Ellipse2D.Double(9.6, 1.4, 3.8, 3.8));
+    // A curva que liga a branch de volta ao tronco.
+    java.awt.geom.Path2D.Double merge = new java.awt.geom.Path2D.Double();
+    merge.moveTo(11.5, 5.4);
+    merge.curveTo(11.5, 9.5, 4.5, 7.5, 4.5, 11);
+    g.draw(merge);
+  }
+
+  /** Duas folhas lado a lado: a comparação de dois arquivos. */
+  private static void twoFiles(Graphics2D g) {
+    g.draw(new java.awt.geom.RoundRectangle2D.Double(1.5, 2.5, 5.5, 11, 1.2, 1.2));
+    g.draw(new java.awt.geom.RoundRectangle2D.Double(9, 2.5, 5.5, 11, 1.2, 1.2));
+    g.draw(new java.awt.geom.Line2D.Double(2.8, 6, 5.7, 6));
+    g.draw(new java.awt.geom.Line2D.Double(2.8, 9, 5.7, 9));
+    g.draw(new java.awt.geom.Line2D.Double(10.3, 6, 13.2, 6));
+    g.draw(new java.awt.geom.Line2D.Double(10.3, 9, 13.2, 9));
   }
 
   /** O "¶" do espaço: pontos entre traços, como editor mostra whitespace. */

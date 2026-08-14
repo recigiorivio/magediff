@@ -34,6 +34,8 @@ public final class TextFile {
   private final long byteSize;
   private final Instant modifiedAt;
   private boolean dirty;
+  /** Nome de exibição quando não há arquivo em disco (blob de commit). */
+  private String label;
 
   private TextFile(Path path, List<String> lines, String eol, boolean bom,
       boolean trailingNewline, boolean mixedEol, Charset charset, long byteSize,
@@ -59,6 +61,19 @@ public final class TextFile {
   }
 
   /**
+   * Conteúdo que não vem de arquivo em disco — hoje, um blob de um commit.
+   *
+   * <p>Fica sem {@code path} de propósito: sem caminho não há onde gravar, e é
+   * assim que "commit é imutável" vira uma propriedade do objeto em vez de uma
+   * regra que a tela precisa lembrar de aplicar.
+   */
+  public static TextFile ofBytes(byte[] bytes, Charset charset, String label) {
+    TextFile parsed = parse(new String(bytes, charset), charset, null, bytes.length, null);
+    parsed.label = label;
+    return parsed;
+  }
+
+  /**
    * @param charset como interpretar os bytes. Trocar a codificação relê o
    *     arquivo do disco — é a única forma honesta: o texto em memória já foi
    *     decodificado e reinterpretá-lo daria lixo.
@@ -66,7 +81,13 @@ public final class TextFile {
   public static TextFile read(Path path, Charset charset) throws IOException {
     byte[] bytes = Files.readAllBytes(path);
     BasicFileAttributes attrs = Files.readAttributes(path, BasicFileAttributes.class);
-    String raw = new String(bytes, charset);
+    return parse(new String(bytes, charset), charset, path, bytes.length,
+        attrs.lastModifiedTime().toInstant());
+  }
+
+  private static TextFile parse(String content, Charset charset, Path path, long byteSize,
+      Instant modifiedAt) {
+    String raw = content;
     boolean bom = !raw.isEmpty() && raw.charAt(0) == '\uFEFF';
     if (bom) {
       raw = raw.substring(1);
@@ -96,7 +117,7 @@ public final class TextFile {
       }
     }
     return new TextFile(path, lines, eol, bom, trailingNewline, mixedEol, charset,
-        bytes.length, attrs.lastModifiedTime().toInstant());
+        byteSize, modifiedAt);
   }
 
   public void write(Path target) throws IOException {
@@ -136,7 +157,15 @@ public final class TextFile {
   }
 
   public String name() {
-    return path == null ? "(sem arquivo)" : path.getFileName().toString();
+    if (path != null) {
+      return path.getFileName().toString();
+    }
+    return label == null ? "(sem arquivo)" : label;
+  }
+
+  /** Sem caminho não há onde gravar: é o caso do lado "revisão" no modo Git. */
+  public boolean readOnly() {
+    return path == null && label != null;
   }
 
   public boolean dirty() {

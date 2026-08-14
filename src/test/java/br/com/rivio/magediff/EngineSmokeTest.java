@@ -34,6 +34,7 @@ public final class EngineSmokeTest {
     ignoreWhitespace();
     contiguousBlocks();
     mergedRegionStaysVisible();
+    gitMode();
 
     if (failures > 0) {
       System.out.printf("%n%d verificação(ões) falharam%n", failures);
@@ -428,6 +429,104 @@ public final class EngineSmokeTest {
         .filter(row -> row.kind() != Kind.GAP && row.hasOld())
         .count();
     return hidden + (int) shown;
+  }
+
+  /**
+   * Modo Git, contra um repositório DE VERDADE criado num diretório temporário.
+   * Um teste com repositório falso ("e se o JGit devolvesse isto…") provaria
+   * apenas que eu sei escrever mocks; o que precisa valer é o comportamento
+   * contra as árvores e blobs reais.
+   */
+  private static void gitMode() {
+    java.nio.file.Path dir = null;
+    try {
+      dir = java.nio.file.Files.createTempDirectory("magediff-git");
+      try (org.eclipse.jgit.api.Git git =
+          org.eclipse.jgit.api.Git.init().setDirectory(dir.toFile()).call()) {
+
+        write(dir, "igual.txt", "sem mudança\n");
+        write(dir, "mudou.txt", "linha um\nlinha dois\n");
+        write(dir, "sumiu.txt", "vou ser apagado\n");
+        git.add().addFilepattern(".").call();
+        git.commit().setMessage("primeiro").setAuthor("t", "t@t").call();
+
+        // Estado local: um arquivo alterado, um apagado, um novo.
+        write(dir, "mudou.txt", "linha um\nlinha DOIS\n");
+        java.nio.file.Files.delete(dir.resolve("sumiu.txt"));
+        write(dir, "novo.txt", "acabei de nascer\n");
+
+        try (GitRepo repo = GitRepo.open(dir)) {
+          check("git: abriu o repositório", repo != null);
+          GitRepo.Side work = GitRepo.Side.workingTree();
+          GitRepo.Side head = GitRepo.Side.revision("HEAD", "HEAD");
+
+          List<GitRepo.ChangedFile> changes = repo.changes(head, work);
+          check("git: 3 arquivos diferem do HEAD (achou " + changes.size() + ")",
+              changes.size() == 3);
+          check("git: o inalterado NÃO está na lista",
+              changes.stream().noneMatch(c -> c.path().equals("igual.txt")));
+          check("git: classifica adicionado/removido/alterado",
+              kindOf(changes, "novo.txt") == GitRepo.ChangeKind.ADICIONADO
+                  && kindOf(changes, "sumiu.txt") == GitRepo.ChangeKind.REMOVIDO
+                  && kindOf(changes, "mudou.txt") == GitRepo.ChangeKind.ALTERADO);
+
+          // O conteúdo de cada lado é o que alimenta o diff.
+          TextFile antes = repo.file(head, "mudou.txt");
+          TextFile agora = repo.file(work, "mudou.txt");
+          check("git: lê o conteúdo do commit",
+              antes != null && antes.lines().equals(List.of("linha um", "linha dois")));
+          check("git: lê o conteúdo da pasta de trabalho",
+              agora != null && agora.lines().equals(List.of("linha um", "linha DOIS")));
+          check("git: o lado do commit é read-only (não há onde gravar)",
+              antes.readOnly() && !agora.readOnly());
+
+          Result diff = DiffEngine.diff(antes.lines(), agora.lines(), false);
+          check("git: o diff do arquivo dá 1 bloco", diff.hunks().size() == 1);
+
+          check("git: arquivo ausente de um lado devolve null",
+              repo.file(work, "sumiu.txt") == null && repo.file(head, "novo.txt") == null);
+
+          // Uma branch nova entra na lista de lados.
+          git.branchCreate().setName("experimento").call();
+          boolean hasBranch = repo.sides().stream()
+              .anyMatch(side -> side.label().contains("experimento"));
+          check("git: branches aparecem como lado comparável", hasBranch);
+          check("git: a pasta de trabalho é o primeiro lado oferecido",
+              repo.sides().get(0).isWorkingTree());
+        }
+      }
+    } catch (Exception e) {
+      check("git: " + e, false);
+    } finally {
+      deleteTree(dir);
+    }
+  }
+
+  private static GitRepo.ChangeKind kindOf(List<GitRepo.ChangedFile> changes, String path) {
+    return changes.stream().filter(c -> c.path().equals(path))
+        .map(GitRepo.ChangedFile::kind).findFirst().orElse(null);
+  }
+
+  private static void write(java.nio.file.Path dir, String name, String content)
+      throws java.io.IOException {
+    java.nio.file.Files.writeString(dir.resolve(name), content);
+  }
+
+  private static void deleteTree(java.nio.file.Path dir) {
+    if (dir == null) {
+      return;
+    }
+    try (java.util.stream.Stream<java.nio.file.Path> walk = java.nio.file.Files.walk(dir)) {
+      walk.sorted(java.util.Comparator.reverseOrder()).forEach(p -> {
+        try {
+          java.nio.file.Files.deleteIfExists(p);
+        } catch (java.io.IOException ignored) {
+          // temporário: falha na limpeza não invalida o teste
+        }
+      });
+    } catch (java.io.IOException ignored) {
+      // idem
+    }
   }
 
   private static TextFile fileWith(String... content) {

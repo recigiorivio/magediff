@@ -10,12 +10,35 @@ Java 17 + Swing. O alinhamento vem do **HistogramDiff do [Eclipse JGit](https://
 são resolvidas uma vez para `target/lib`; depois disso `./run.sh` só usa
 `javac`/`java`.
 
+![tela inicial](docs/tela-inicial.png)
+
 ![exemplo](docs/exemplo.png)
+
+## Dois modos
+
+Ao abrir sem argumentos, o MageDiff pergunta o que você quer comparar:
+
+| Modo | O que faz |
+|---|---|
+| **Comparar arquivos** | dois arquivos lado a lado — escolher, colar o caminho ou arrastar |
+| **Comparar repositório Git** | abre uma pasta e compara **pasta de trabalho × HEAD**, ou duas branches. Lista os arquivos que diferem; clicar num deles abre o diff |
+
+![modo git](docs/modo-git.png)
+
+No modo Git o lado da revisão é **somente leitura** — commit é imutável, então
+não há onde gravar. Copiar um bloco para esse lado é bloqueado com aviso, em vez
+de alterar só a memória e sumir no clique seguinte. O lado da pasta de trabalho
+grava normalmente.
+
+O JGit já estava no projeto pelo algoritmo de diff, e ele é uma implementação
+completa do Git: ler branches, árvores e blobs não depende do executável `git`
+estar instalado.
 
 ## Rodar
 
 ```bash
-./run.sh                          # janela vazia (use os botões "Abrir")
+./run.sh                          # tela inicial: escolher arquivos ou repositório
+./run.sh --git /caminho/do/repo   # abre direto no modo Git
 ./run.sh a.xml b.xml              # já abre comparando
 ./run.sh demo                     # abre os arquivos de samples/ em cópia
 ./run.sh test                     # verificações do motor de diff e do merge
@@ -46,6 +69,8 @@ em `pom.xml` → *Add as Maven Project*.
 | Copiar linhas para a área de transferência | `⌘C` |
 | Colar por cima da seleção | `⌘V` |
 | Desfazer / refazer | `⌘Z` / `⌘⇧Z` (ou `⌘Y`) — ou o **↶ que aparece na coluna do meio**, onde a cópia acabou de cair |
+| Voltar à tela inicial | menu Arquivo › Tela inicial (`⌘0`) |
+| Abrir repositório Git | menu Arquivo › Comparar repositório Git (`⌘G`) |
 | Escolher arquivo | **arrastar do Finder** para o lado desejado, pastinha na barra de caminho, ou colar o caminho e teclar Enter |
 | Gravar um lado | disquete ao lado da pasta, ou o menu Arquivo |
 | Trocar codificação / fim de linha | combos na segunda fileira do cabeçalho |
@@ -154,6 +179,10 @@ arquivo que já está na memória custa nada perto disso.
 | `LineSequence.java` | Adaptador de `List<String>` para o `Sequence` do JGit |
 | `Icons.java` | Ícones desenhados como vetor (não caracteres unicode) |
 | `PathBar.java` | Caminho editável + pastinha, alinhados às colunas |
+| `GitRepo.java` | Modo Git via JGit: lados, arquivos que diferem, conteúdo de cada revisão |
+| `GitHeader.java` | Cabeçalho do modo Git: repositório e os dois lados |
+| `ChangedFilesList.java` | Lista lateral dos arquivos que diferem |
+| `StartScreen.java` | As duas opções ao abrir |
 | `Minimap.java` | Faixa lateral com o arquivo inteiro e o trecho visível |
 | `Palette.java` | Cores, com variante clara e escura |
 | `MageDiffApp.java` | Janela, barra de ferramentas, atalhos, área de transferência, `--render` |

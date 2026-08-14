@@ -106,6 +106,26 @@ caiu e desenha ali o desfazer; some no próximo diff que não venha de uma cópi
 O cálculo (`rowOfLine`) é feito DEPOIS do recompute — antes dele as rows ainda
 são as antigas.
 
+**O modo Git usa o JGit como Git, não só como diff.** `GitRepo` abre o
+repositório (`findGitDir` sobe até achar o `.git`, como o próprio git), lista
+branches, roda `DiffFormatter.scan` entre dois lados e lê blobs. Nada de chamar o
+executável `git`: ele pode não estar no PATH, e a saída dele seria texto para
+parsear de volta.
+
+**Lado de revisão é read-only por construção, não por regra de tela.** O
+`TextFile` de um blob nasce sem `path` — sem caminho não há onde gravar, e
+`readOnly()` é derivado disso. Gravar e copiar-para-cá são bloqueados no
+`MageDiffApp`; se a checagem sumisse, o merge alteraria só a memória e sumiria no
+clique seguinte, dando a impressão de que foi aplicado.
+
+**`--git <pasta>` abre o modo Git sem diálogo.** Existe para o terminal e porque
+o teste visual não pode parar num seletor de arquivos.
+
+⚠️ **slf4j-nop tem que ser da MESMA linha do slf4j-api que o JGit traz (1.7.x).**
+Com o 2.x o binding é por ServiceLoader e o 1.7 procura
+`org.slf4j.impl.StaticLoggerBinder` — versões cruzadas fazem o NOP não ligar, e o
+aviso aparece no console assim mesmo. Aconteceu.
+
 ## Verificação sem clicar
 
 `--render` pinta a interface num PNG sem exibir janela (`addNotify` + `validate`
