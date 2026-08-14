@@ -87,7 +87,9 @@ public final class MageDiffApp extends JFrame {
   private GitHeader gitHeader;
   private ChangedFilesList filesList;
   private GitRepo repo;
-  private String openPath;
+  private FolderPair folders;
+  private LoadingCard loading;
+  private boolean onDiffCard;
 
   private MageDiffApp(TextFile left, TextFile right) {
     super("MageDiff");
@@ -127,6 +129,16 @@ public final class MageDiffApp extends JFrame {
     });
     view.setMergeListener(this::applyHunk);
     view.setUndoListener(this::undo);
+    // Barra de caminho e cabeçalho do Git se posicionam pela geometria das
+    // colunas; arrastar o divisor tem que reposicioná-los junto, senão o campo
+    // de um lado passa a descrever a coluna do outro.
+    view.setGeometryListener(() -> {
+      // gitHeader é criado depois deste ponto no construtor; o listener só é
+      // acionado por interação, mas a guarda evita depender dessa ordem.
+      relayout(pathBar);
+      relayout(gitHeader);
+      syncScrollBar();
+    });
     // Soltar arquivo no diff OU na barra de caminho: os dois são "o lado".
     FileDrop.install(view, point -> point.x < view.xArrow(), this::dropFile);
     FileDrop.install(pathBar, point -> point.x < view.xArrow(), this::dropFile);
@@ -166,7 +178,13 @@ public final class MageDiffApp extends JFrame {
         openGitFolder();
       }
     });
-    filesList = new ChangedFilesList(view.palette(), this::openGitFile);
+    filesList = new ChangedFilesList(view.palette(), file -> {
+      if (repo != null) {
+        openGitFile(file);
+      } else if (folders != null) {
+        openFolderFile(file);
+      }
+    });
 
     JPanel diffCard = new JPanel(new BorderLayout());
     diffCard.add(buildToolbar(), BorderLayout.NORTH);
@@ -176,7 +194,10 @@ public final class MageDiffApp extends JFrame {
     filesList.setVisible(false);
 
     root.setBackground(view.palette().background());
-    root.add(new StartScreen(view.palette(), this::startFileMode, this::openGitFolder), "start");
+    loading = new LoadingCard(view.palette());
+    root.add(new StartScreen(view.palette(), this::startFileMode, this::openFolders,
+        this::openGitFolder), "start");
+    root.add(loading, "loading");
     root.add(diffCard, "diff");
 
     setJMenuBar(buildMenuBar());
@@ -242,6 +263,11 @@ public final class MageDiffApp extends JFrame {
 
   private JPanel buildEditRow(Palette p) {
     JPanel bar = Ui.bar(p);
+    // Voltar ao início tinha item de menu e nenhum botão — numa barra só de
+    // ícones, o que não está aqui não existe para quem não abre menu.
+    bar.add(Ui.iconButton(Icons.Glyph.HOME, "Fechar a comparação e voltar ao início ("
+        + shortcutName() + "W)", Ui.Style.NORMAL, p, this::closeComparison));
+    bar.add(Ui.separator(p));
     bar.add(Ui.iconButton(Icons.Glyph.PREV, "Diferença anterior (F7 ou " + shortcutName() + "↑)",
         Ui.Style.NORMAL, p, view::previousHunk));
     bar.add(Ui.gap(4));
@@ -303,7 +329,8 @@ public final class MageDiffApp extends JFrame {
     JMenuBar bar = new JMenuBar();
 
     JMenu file = new JMenu("Arquivo");
-    file.add(item("Tela inicial", KeyStroke.getKeyStroke(KeyEvent.VK_0, menu), this::showStart));
+    file.add(item("Comparar pastas…", KeyStroke.getKeyStroke(KeyEvent.VK_D, menu),
+        this::openFolders));
     file.add(item("Comparar repositório Git…",
         KeyStroke.getKeyStroke(KeyEvent.VK_G, menu), this::openGitFolder));
     file.add(item("Nova comparação", KeyStroke.getKeyStroke(KeyEvent.VK_N, menu),
@@ -325,7 +352,8 @@ public final class MageDiffApp extends JFrame {
     file.add(saveLeftItem);
     file.add(saveRightItem);
     file.addSeparator();
-    file.add(item("Fechar", KeyStroke.getKeyStroke(KeyEvent.VK_W, menu), this::closeWindow));
+    file.add(item("Fechar comparação", KeyStroke.getKeyStroke(KeyEvent.VK_W, menu),
+        this::closeComparison));
     bar.add(file);
 
     JMenu edit = new JMenu("Editar");
@@ -392,10 +420,34 @@ public final class MageDiffApp extends JFrame {
     flash("Nova comparação — use Arquivo › Abrir");
   }
 
-  private void closeWindow() {
-    if (confirmDiscard("Há alterações não gravadas. Fechar de qualquer jeito?")) {
+  /**
+   * Fecha a comparação e volta à tela inicial. Na própria tela inicial, fecha a
+   * janela — é o que ⌘W significa quando não há mais nada para fechar.
+   *
+   * <p>Limpa TUDO: arquivos, repositório, histórico de desfazer, seleção e
+   * rastro. Voltar ao início e reencontrar o desfazer da comparação anterior
+   * seria pior que não ter desfazer nenhum — o ⌘Z aplicaria uma alteração que
+   * pertence a outro par de arquivos.
+   */
+  private void closeComparison() {
+    if (!onDiffCard) {
       dispose();
+      return;
     }
+    if (!confirmDiscard("Há alterações não gravadas. Fechar a comparação assim mesmo?")) {
+      return;
+    }
+    closeRepo();
+    left = TextFile.empty();
+    right = TextFile.empty();
+    history.clear();
+    view.clearSelection();
+    clearTrail();
+    filesList.setFiles(List.of());
+    filesList.setRoots(null, null);
+    filesList.setVisible(false);
+    recompute();
+    showStart();
   }
 
   /** {@code true} quando pode seguir: não há nada pendente ou o usuário confirmou. */
@@ -405,6 +457,19 @@ public final class MageDiffApp extends JFrame {
     }
     return JOptionPane.showConfirmDialog(this, message, "Confirmar",
         JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE) == JOptionPane.YES_OPTION;
+  }
+
+  /** Para o render: a abertura agora é assíncrona, então quem vai pintar precisa
+   * saber se a comparação já chegou na tela. */
+  boolean showingDiff() {
+    return onDiffCard;
+  }
+
+  private static void relayout(javax.swing.JComponent component) {
+    if (component != null) {
+      component.doLayout();
+      component.repaint();
+    }
   }
 
   /** "⌘" no macOS, "Ctrl+" no resto — só para o texto das dicas. */
@@ -730,24 +795,153 @@ public final class MageDiffApp extends JFrame {
 
   // ─── Arquivos ───────────────────────────────────────────────────────────
 
+  // ─── Trabalho pesado fora da thread da interface ────────────────────────
+
+  /**
+   * Roda a parte demorada numa thread de trabalho e volta para a interface só
+   * para aplicar o resultado.
+   *
+   * <p>Não é só cortesia: varrer duas pastas grandes ou um repositório leva
+   * segundos, e feito na thread da interface a janela para de repintar — o
+   * próprio "carregando" não apareceria, porque quem desenha é a thread que está
+   * bloqueada. Por isso o {@link LoadingCard} e o {@link SwingWorker} são a mesma
+   * mudança, não duas.
+   *
+   * @param what o que está acontecendo, para a tela de espera
+   * @param work a parte demorada — roda FORA da interface, não pode tocar em
+   *     componente nenhum
+   * @param apply o que fazer com o resultado — roda na interface
+   */
+  private <T> void background(String what, String where, java.util.concurrent.Callable<T> work,
+      java.util.function.Consumer<T> apply) {
+    loading.show(what, where);
+    // A tela de espera entra ATRASADA: mostrada de imediato, ela pisca em toda
+    // troca de arquivo pequeno (que termina em milissegundos) e o pisca-pisca
+    // incomoda mais que a espera. Se o trabalho acabar antes dos 150 ms, ela
+    // nunca aparece.
+    javax.swing.Timer delay = new javax.swing.Timer(150, e -> cards.show(root, "loading"));
+    delay.setRepeats(false);
+    delay.start();
+    new javax.swing.SwingWorker<T, Void>() {
+      @Override
+      protected T doInBackground() throws Exception {
+        return work.call();
+      }
+
+      @Override
+      protected void done() {
+        delay.stop();
+        try {
+          apply.accept(get());
+        } catch (Exception e) {
+          Throwable cause = e.getCause() == null ? e : e.getCause();
+          JOptionPane.showMessageDialog(MageDiffApp.this,
+              "Falhou:\n" + cause.getMessage(), "Erro", JOptionPane.ERROR_MESSAGE);
+          showStart();
+        }
+      }
+    }.execute();
+  }
+
   // ─── Modos ──────────────────────────────────────────────────────────────
 
   /** Mostra a tela inicial (as duas opções). */
   private void showStart() {
     cards.show(root, "start");
+    onDiffCard = false;
     setTitle("MageDiff");
   }
 
   /** Modo arquivo: a tela que já existia, com a barra de caminhos. */
   private void startFileMode() {
     closeRepo();
+    filesList.setRoots(null, null);
     view.setEmptyMessage("Nenhum arquivo aberto\n"
         + "Use as pastinhas acima, cole um caminho, ou arraste os arquivos para cá");
     filesList.setVisible(false);
     scroll.setColumnHeaderView(pathBar);
     cards.show(root, "diff");
+    onDiffCard = true;
     recompute();
     revalidate();
+  }
+
+  /**
+   * Modo pasta: escolhe as duas raízes e lista o que difere entre elas.
+   *
+   * <p>Dois seletores em sequência, não um diálogo próprio: é o gesto que o
+   * sistema já sabe fazer, e um diálogo caseiro com dois campos de pasta seria
+   * mais trabalho para dizer a mesma coisa.
+   */
+  private void openFolders() {
+    Path left = chooseFolder("Escolher a pasta da ESQUERDA", null);
+    if (left == null) {
+      return;
+    }
+    Path right = chooseFolder("Escolher a pasta da DIREITA", left.getParent());
+    if (right == null) {
+      return;
+    }
+    openFolderPair(left, right);
+  }
+
+  /** Abre um par de pastas sem diálogo — usado pelo `--folders a b` e pelo teste
+   * visual, que não pode parar num seletor. */
+  void openFolderPair(Path leftRoot, Path rightRoot) {
+    closeRepo();
+    FolderPair pair = new FolderPair(leftRoot, rightRoot);
+    background("Comparando as pastas…",
+        leftRoot.getFileName() + "  ×  " + rightRoot.getFileName(),
+        pair::changes,
+        changes -> {
+          folders = pair;
+          filesList.setVisible(true);
+          filesList.setRoots(leftRoot.toString(), rightRoot.toString());
+          scroll.setColumnHeaderView(pathBar);
+          cards.show(root, "diff");
+          onDiffCard = true;
+          applyFolderChanges(changes);
+          revalidate();
+        });
+  }
+
+  private Path chooseFolder(String title, Path startAt) {
+    JFileChooser chooser = new JFileChooser();
+    chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
+    chooser.setDialogTitle(title);
+    if (startAt != null) {
+      chooser.setCurrentDirectory(startAt.toFile());
+    }
+    return chooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION
+        ? chooser.getSelectedFile().toPath() : null;
+  }
+
+  private void refreshFolderChanges() {
+    if (folders == null) {
+      return;
+    }
+    FolderPair pair = folders;
+    background("Comparando as pastas…", null, pair::changes, this::applyFolderChanges);
+  }
+
+  private void applyFolderChanges(List<ChangedFile> changes) {
+    cards.show(root, "diff");
+    onDiffCard = true;
+    try {
+      if (changes.isEmpty()) {
+        left = TextFile.empty();
+        right = TextFile.empty();
+        view.setEmptyMessage("As duas pastas têm o mesmo conteúdo\n"
+            + "Nenhum arquivo difere entre elas");
+        recompute();
+      }
+      filesList.setFiles(changes);
+      setTitle("MageDiff — " + folders.left().getFileName() + " × "
+          + folders.right().getFileName());
+    } catch (Exception e) {
+      JOptionPane.showMessageDialog(this, "Não foi possível comparar as pastas:\n"
+          + e.getMessage(), "Erro", JOptionPane.ERROR_MESSAGE);
+    }
   }
 
   /**
@@ -771,27 +965,39 @@ public final class MageDiffApp extends JFrame {
   /** Abre um repositório sem diálogo — usado pelo `--git <pasta>` e pelo teste
    * visual, que não pode parar num seletor de arquivos. */
   void openRepo(Path folder) {
-    try {
+    background("Abrindo o repositório…", folder.getFileName().toString(), () -> {
       GitRepo opened = GitRepo.open(folder);
       if (opened == null) {
+        return null;
+      }
+      // Tudo o que consulta o disco acontece AQUI, fora da interface: branches,
+      // lista de commits e o primeiro diff.
+      return new RepoSnapshot(opened, opened.workTree() + "   ·   branch "
+          + opened.currentBranch(), opened.sides(), opened.commits(GitHeader.MAX_COMMITS));
+    }, snapshot -> {
+      if (snapshot == null) {
         JOptionPane.showMessageDialog(this,
             "Não há repositório Git nesta pasta (nem acima dela).",
             "Sem repositório", JOptionPane.WARNING_MESSAGE);
+        showStart();
         return;
       }
       closeRepo();
-      repo = opened;
+      repo = snapshot.repo();
       filesList.setVisible(true);
+      filesList.setRoots(null, null);
       scroll.setColumnHeaderView(gitHeader);
-      gitHeader.setRepo(repo.workTree() + "   ·   branch " + repo.currentBranch(),
-          repo.sides());
+      gitHeader.setRepo(snapshot.description(), snapshot.sides(), snapshot.commits());
       cards.show(root, "diff");
+      onDiffCard = true;
       refreshGitChanges();
       revalidate();
-    } catch (Exception e) {
-      JOptionPane.showMessageDialog(this, "Não foi possível abrir o repositório:\n"
-          + e.getMessage(), "Erro", JOptionPane.ERROR_MESSAGE);
-    }
+    });
+  }
+
+  /** O que foi lido do repositório numa tacada, para a interface só aplicar. */
+  private record RepoSnapshot(GitRepo repo, String description, List<GitRepo.Side> sides,
+      List<GitRepo.CommitInfo> commits) {
   }
 
   /** Relista os arquivos que diferem entre os dois lados escolhidos. */
@@ -799,22 +1005,24 @@ public final class MageDiffApp extends JFrame {
     if (repo == null) {
       return;
     }
-    try {
-      List<GitRepo.ChangedFile> changes = repo.changes(gitHeader.from(), gitHeader.to());
-      if (changes.isEmpty()) {
-        left = TextFile.empty();
-        right = TextFile.empty();
-        view.setEmptyMessage("Nenhuma diferença entre os dois lados\n"
-            + gitHeader.from().label() + "  e  " + gitHeader.to().label()
-            + " estão iguais — troque um dos lados acima");
-        recompute();
-      }
-      filesList.setFiles(changes);
-      setTitle("MageDiff — " + repo.workTree().getFileName());
-    } catch (Exception e) {
-      JOptionPane.showMessageDialog(this, "Não foi possível comparar:\n" + e.getMessage(),
-          "Erro", JOptionPane.ERROR_MESSAGE);
-    }
+    GitRepo current = repo;
+    GitRepo.Side from = gitHeader.from();
+    GitRepo.Side to = gitHeader.to();
+    background("Comparando…", from.label() + "  ×  " + to.label(),
+        () -> current.changes(from, to), changes -> {
+          cards.show(root, "diff");
+          onDiffCard = true;
+          if (changes.isEmpty()) {
+            left = TextFile.empty();
+            right = TextFile.empty();
+            view.setEmptyMessage("Nenhuma diferença entre os dois lados\n"
+                + from.label() + "  e  " + to.label()
+                + " estão iguais — troque um dos lados acima");
+            recompute();
+          }
+          filesList.setFiles(changes);
+          setTitle("MageDiff — " + current.workTree().getFileName());
+        });
   }
 
   /**
@@ -822,26 +1030,47 @@ public final class MageDiffApp extends JFrame {
    * ou removido) entra vazio — que é exatamente como o diff já representa "não
    * existe deste lado".
    */
-  private void openGitFile(GitRepo.ChangedFile file) {
+  private void openGitFile(ChangedFile file) {
     if (repo == null) {
       return;
     }
-    try {
-      TextFile a = repo.file(gitHeader.from(), file.oldPath());
-      TextFile b = repo.file(gitHeader.to(), file.path());
-      // Lado onde o arquivo não existe entra vazio COM rótulo: "(sem arquivo)"
-      // não diz nada, "(não existe em HEAD)" explica o lado todo cinza.
-      left = a != null ? a : absent(gitHeader.from());
-      right = b != null ? b : absent(gitHeader.to());
-      view.setEmptyMessage("Este arquivo é igual nos dois lados");
-      history.clear();
-      view.clearSelection();
-      clearTrail();
-      recompute();
-    } catch (Exception e) {
-      JOptionPane.showMessageDialog(this, "Não foi possível ler o arquivo:\n" + e.getMessage(),
-          "Erro", JOptionPane.ERROR_MESSAGE);
+    GitRepo current = repo;
+    GitRepo.Side from = gitHeader.from();
+    GitRepo.Side to = gitHeader.to();
+    background("Abrindo " + file.path(), null, () -> new SidePair(
+        current.file(from, file.oldPath()), current.file(to, file.path())),
+        pair -> {
+          // Lado onde o arquivo não existe entra vazio COM rótulo: "(sem arquivo)"
+          // não diz nada, "(não existe em HEAD)" explica o lado todo cinza.
+          left = pair.left() != null ? pair.left() : absent(from);
+          right = pair.right() != null ? pair.right() : absent(to);
+          view.setEmptyMessage("Este arquivo é igual nos dois lados");
+          afterSidesLoaded();
+        });
+  }
+
+  /** Abre os dois lados de um arquivo da comparação por pasta. Aqui os dois são
+   * arquivos reais, então gravar e copiar valem nas duas direções. */
+  private void openFolderFile(ChangedFile file) {
+    if (folders == null) {
+      return;
     }
+    FolderPair pair = folders;
+    background("Abrindo " + file.path(), null, () -> new SidePair(
+        pair.file(true, file.path()), pair.file(false, file.path())),
+        sides -> {
+          left = sides.left() != null ? sides.left()
+              : TextFile.ofBytes(new byte[0], java.nio.charset.StandardCharsets.UTF_8,
+                  "(não existe na esquerda)");
+          right = sides.right() != null ? sides.right()
+              : TextFile.ofBytes(new byte[0], java.nio.charset.StandardCharsets.UTF_8,
+                  "(não existe na direita)");
+          view.setEmptyMessage("Este arquivo é igual nos dois lados");
+          afterSidesLoaded();
+        });
+  }
+
+  private record SidePair(TextFile left, TextFile right) {
   }
 
   /** Lado vazio e read-only, nomeado pelo lado a que pertence. */
@@ -850,11 +1079,23 @@ public final class MageDiffApp extends JFrame {
         "(não existe em " + side.label() + ")");
   }
 
+  /** Estado comum depois de trocar os dois lados: o par anterior não tem mais
+   * nada a ver com este, então histórico, seleção e rastro vão embora. */
+  private void afterSidesLoaded() {
+    history.clear();
+    view.clearSelection();
+    clearTrail();
+    cards.show(root, "diff");
+    onDiffCard = true;
+    recompute();
+  }
+
   private void closeRepo() {
     if (repo != null) {
       repo.close();
       repo = null;
     }
+    folders = null;
   }
 
   /** Arquivo solto: carrega no lado onde caiu. */
@@ -957,6 +1198,16 @@ public final class MageDiffApp extends JFrame {
   /** Relê os dois arquivos do disco. Alteração não gravada é perdida, então
    * pergunta antes — é a única ação do app que descarta trabalho sem gravar. */
   private void reload() {
+    if (repo != null) {
+      refreshGitChanges();
+      flash("Repositório relido");
+      return;
+    }
+    if (folders != null) {
+      refreshFolderChanges();
+      flash("Pastas relidas");
+      return;
+    }
     boolean pending = (left.dirty() && left.loaded()) || (right.dirty() && right.loaded());
     if (pending) {
       int answer = JOptionPane.showConfirmDialog(this,
@@ -1023,16 +1274,23 @@ public final class MageDiffApp extends JFrame {
     List<String> files = new ArrayList<>();
     String renderTo = null;
     String gitFolder = null;
+    String folderLeft = null;
+    String folderRight = null;
     for (int i = 0; i < args.length; i++) {
       if ("--render".equals(args[i]) && i + 1 < args.length) {
         renderTo = args[++i];
       } else if ("--git".equals(args[i]) && i + 1 < args.length) {
         gitFolder = args[++i];
+      } else if ("--folders".equals(args[i]) && i + 2 < args.length) {
+        folderLeft = args[++i];
+        folderRight = args[++i];
       } else {
         files.add(args[i]);
       }
     }
     final String repoFolder = gitFolder;
+    final String pairLeft = folderLeft;
+    final String pairRight = folderRight;
 
     TextFile left = load(files, 0);
     TextFile right = load(files, 1);
@@ -1043,7 +1301,8 @@ public final class MageDiffApp extends JFrame {
       if (java.awt.GraphicsEnvironment.isHeadless()) {
         renderToPng(left, right, Path.of(renderTo));
       } else {
-        renderWindowToPng(left, right, Path.of(renderTo), 1320, 660, repoFolder);
+        renderWindowToPng(left, right, Path.of(renderTo), 1320, 660, repoFolder,
+            pairLeft, pairRight);
       }
       System.exit(0);
     }
@@ -1062,6 +1321,8 @@ public final class MageDiffApp extends JFrame {
       MageDiffApp app = new MageDiffApp(left, right);
       if (repoFolder != null) {
         app.openRepo(Path.of(repoFolder));
+      } else if (pairLeft != null) {
+        app.openFolderPair(Path.of(pairLeft), Path.of(pairRight));
       }
       app.setVisible(true);
     });
@@ -1099,8 +1360,9 @@ public final class MageDiffApp extends JFrame {
    * revisar espaçamento e estado dos botões sem depender de screenshot manual.
    */
   private static void renderWindowToPng(TextFile left, TextFile right, Path out, int width,
-      int height, String repoFolder) throws Exception {
+      int height, String repoFolder, String pairLeft, String pairRight) throws Exception {
     final BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
+    final MageDiffApp[] holder = new MageDiffApp[1];
     SwingUtilities.invokeAndWait(() -> {
       try {
         UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
@@ -1110,9 +1372,26 @@ public final class MageDiffApp extends JFrame {
       MageDiffApp app = new MageDiffApp(left, right);
       if (repoFolder != null) {
         app.openRepo(Path.of(repoFolder));
+      } else if (pairLeft != null) {
+        app.openFolderPair(Path.of(pairLeft), Path.of(pairRight));
       }
       app.setSize(width, height);
       app.addNotify();
+      app.validate();
+      holder[0] = app;
+    });
+
+    // Espera o trabalho de fundo: com abertura assíncrona, pintar já seria
+    // capturar a tela de espera. Teto de 30 s para não pendurar o build.
+    if (repoFolder != null || pairLeft != null) {
+      long deadline = System.currentTimeMillis() + 30_000;
+      while (System.currentTimeMillis() < deadline && !ready(holder[0])) {
+        Thread.sleep(80);
+      }
+    }
+
+    SwingUtilities.invokeAndWait(() -> {
+      MageDiffApp app = holder[0];
       app.validate();
       if (app.view.hunkCount() > 0) {
         app.view.goToHunk(0);
@@ -1128,6 +1407,12 @@ public final class MageDiffApp extends JFrame {
     });
     ImageIO.write(image, "png", out.toFile());
     System.out.printf("%s — janela %dx%d%n", out, width, height);
+  }
+
+  private static boolean ready(MageDiffApp app) throws Exception {
+    final boolean[] done = new boolean[1];
+    SwingUtilities.invokeAndWait(() -> done[0] = app != null && app.showingDiff());
+    return done[0];
   }
 
   private static void renderToPng(TextFile left, TextFile right, Path out) throws IOException {

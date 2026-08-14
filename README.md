@@ -21,7 +21,26 @@ Ao abrir sem argumentos, o MageDiff pergunta o que você quer comparar:
 | Modo | O que faz |
 |---|---|
 | **Comparar arquivos** | dois arquivos lado a lado — escolher, colar o caminho ou arrastar |
-| **Comparar repositório Git** | abre uma pasta e compara **pasta de trabalho × HEAD**, ou duas branches. Lista os arquivos que diferem; clicar num deles abre o diff |
+| **Comparar pastas** | duas pastas: lista o que existe só de um lado e o que mudou nos dois, casando pelo caminho relativo. Aqui os **dois** lados são graváveis |
+| **Comparar repositório Git** | abre uma pasta e compara por **branch** ou por **commit**. Lista os arquivos que diferem; clicar num deles abre o diff |
+
+No modo Git há duas listas, alternadas pelo botão **Branches / Commits**:
+branch responde "como está na main?" e commit responde "o que mudou naquele
+commit de terça?". Com um commit escolhido, um quadro abaixo mostra a mensagem
+(resumo e corpo), autor, e-mail, data e hash — a mensagem inteira fica na dica de
+contexto. A pasta de trabalho aparece nas duas listas, porque comparar com ela é
+o caso mais comum dos dois lados.
+
+**Comparação grande não congela a janela.** Varrer duas pastas ou um repositório
+roda fora da thread da interface, com uma tela de espera que só aparece se a conta
+passar de 150 ms — assim ela não pisca a cada troca de arquivo pequeno.
+
+**Fechar a comparação (o botão 🏠 ou `⌘W`) volta à tela inicial**, limpando arquivos,
+repositório, histórico e seleção — reencontrar o desfazer da comparação anterior
+aplicaria uma alteração que pertence a outro par de arquivos. Na própria tela
+inicial, `⌘W` fecha a janela.
+
+![modo pasta](docs/modo-pasta.png)
 
 ![modo git](docs/modo-git.png)
 
@@ -39,6 +58,7 @@ estar instalado.
 ```bash
 ./run.sh                          # tela inicial: escolher arquivos ou repositório
 ./run.sh --git /caminho/do/repo   # abre direto no modo Git
+./run.sh --folders pastaA pastaB  # abre direto comparando duas pastas
 ./run.sh a.xml b.xml              # já abre comparando
 ./run.sh demo                     # abre os arquivos de samples/ em cópia
 ./run.sh test                     # verificações do motor de diff e do merge
@@ -79,7 +99,9 @@ em `pom.xml` → *Add as Maven Project*.
 | Ignorar diferença só de indentação | ligar "Ignorar espaços" |
 | Saltar para um ponto do arquivo | clicar no mapa da direita |
 | Trocar os lados | botão `⇄` |
-| Reler do disco | "Recarregar" ou `F5` |
+| Reler do disco | "Recarregar" ou `F5` (relista pastas/repositório também) |
+| Ajustar a largura de cada lado | arrastar o espaço vazio da coluna do meio; duplo clique volta ao meio a meio |
+| Comparar pastas / repositório | menu Arquivo (`⌘D` / `⌘G`) |
 | Gravar | menu Arquivo › Salvar esquerda `⌘S` / direita `⇧⌘S` (só habilitam com alteração pendente) |
 
 Fora do macOS, troque `⌘` por `Ctrl`. `⌘↑`/`⌘↓` existem porque o macOS captura
@@ -179,6 +201,8 @@ arquivo que já está na memória custa nada perto disso.
 | `LineSequence.java` | Adaptador de `List<String>` para o `Sequence` do JGit |
 | `Icons.java` | Ícones desenhados como vetor (não caracteres unicode) |
 | `PathBar.java` | Caminho editável + pastinha, alinhados às colunas |
+| `FolderPair.java` | Modo pasta: casa por caminho relativo, ignora `.git`/`node_modules`/`target` |
+| `ChangedFile.java` | O item da lista, compartilhado pelos modos pasta e Git |
 | `GitRepo.java` | Modo Git via JGit: lados, arquivos que diferem, conteúdo de cada revisão |
 | `GitHeader.java` | Cabeçalho do modo Git: repositório e os dois lados |
 | `ChangedFilesList.java` | Lista lateral dos arquivos que diferem |

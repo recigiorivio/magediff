@@ -70,6 +70,17 @@ public final class DiffView extends JComponent implements Scrollable {
   private int gutterWidth = 58;
   private int maxTextWidth = MIN_TEXT_W;
   private int hOffset;
+  /**
+   * Quanto da área de texto cabe à coluna esquerda (0.5 = meio a meio).
+   *
+   * <p>Começou fixo em metade, com a justificativa de que colunas de larguras
+   * diferentes atrapalham a comparação. Continua sendo o padrão — mas quando um
+   * lado tem linhas longas e o outro não, insistir no meio a meio obriga a rolar
+   * na horizontal para ler o que caberia de graça. O divisor é arrastável, e um
+   * duplo clique volta ao meio.
+   */
+  private double splitRatio = 0.5;
+  private boolean draggingSplit;
   private int currentHunk = -1;
   private int hotHunk = -1;
   private boolean hotToRight;
@@ -82,6 +93,9 @@ public final class DiffView extends JComponent implements Scrollable {
   private int selFocus = -1;
 
   private MergeListener mergeListener;
+  /** Avisa quem desenha cabeçalhos alinhados às colunas (barra de caminho,
+   * cabeçalho do Git) que a geometria mudou. */
+  private Runnable geometryListener;
   private UndoListener undoListener;
   private Runnable selectionListener;
   /**
@@ -104,6 +118,10 @@ public final class DiffView extends JComponent implements Scrollable {
 
   public void setMergeListener(MergeListener listener) {
     this.mergeListener = listener;
+  }
+
+  public void setGeometryListener(Runnable listener) {
+    this.geometryListener = listener;
   }
 
   public void setUndoListener(UndoListener listener) {
@@ -229,11 +247,24 @@ public final class DiffView extends JComponent implements Scrollable {
     return ARROW_W;
   }
 
-  /** Largura de UMA coluna de texto. As duas são iguais de propósito: colunas de
-   * larguras diferentes fazem o olho comparar posições que não correspondem. */
+  /** Espaço que sobra para as DUAS colunas de texto. */
+  private int availableText() {
+    return Math.max(MIN_TEXT_W * 2, getWidth() - gutterWidth * 2 - ARROW_W);
+  }
+
+  public int leftTextWidth() {
+    return Math.max(MIN_TEXT_W, (int) Math.round(availableText() * splitRatio));
+  }
+
+  public int rightTextWidth() {
+    return Math.max(MIN_TEXT_W, availableText() - leftTextWidth());
+  }
+
+  /** Largura usada para a barra de rolagem horizontal: a MENOR das duas. Assim a
+   * coluna estreita também alcança o fim da linha mais longa; usar a maior
+   * deixaria o lado estreito sem conseguir rolar até o fim. */
   public int textWidth() {
-    int available = getWidth() - gutterWidth * 2 - ARROW_W;
-    return Math.max(MIN_TEXT_W, available / 2);
+    return Math.min(leftTextWidth(), rightTextWidth());
   }
 
   public int xTextLeft() {
@@ -241,7 +272,24 @@ public final class DiffView extends JComponent implements Scrollable {
   }
 
   public int xArrow() {
-    return gutterWidth + textWidth();
+    return gutterWidth + leftTextWidth();
+  }
+
+  /** Proporção atual, para quem precisa persistir ou reagir à mudança. */
+  public double splitRatio() {
+    return splitRatio;
+  }
+
+  public void setSplitRatio(double ratio) {
+    double clamped = Math.max(0.15, Math.min(0.85, ratio));
+    if (Math.abs(clamped - splitRatio) > 0.0001) {
+      splitRatio = clamped;
+      hOffset = Math.min(hOffset, Math.max(0, maxTextWidth - textWidth()));
+      if (geometryListener != null) {
+        geometryListener.run();
+      }
+      repaint();
+    }
   }
 
   public int xGutterRight() {
@@ -421,6 +469,15 @@ public final class DiffView extends JComponent implements Scrollable {
           }
           return;
         }
+        // Espaço vazio da coluna das setas = divisor. Os triângulos são alvos
+        // pequenos e já foram testados acima, então o que sobra ali é área livre.
+        if (isOverSplitter(e.getX(), e.getY())) {
+          draggingSplit = true;
+          if (e.getClickCount() == 2) {
+            setSplitRatio(0.5);
+          }
+          return;
+        }
         int row = rowAt(e.getY());
         if (row < 0) {
           return;
@@ -446,6 +503,13 @@ public final class DiffView extends JComponent implements Scrollable {
 
       @Override
       public void mouseDragged(MouseEvent e) {
+        if (draggingSplit) {
+          // A proporção é sobre a área de TEXTO, não sobre a janela: descontar
+          // calhas e coluna de setas é o que faz o divisor acompanhar o cursor.
+          int available = availableText();
+          setSplitRatio((e.getX() - gutterWidth - ARROW_W / 2.0) / available);
+          return;
+        }
         if (selSide == null) {
           return;
         }
@@ -461,6 +525,11 @@ public final class DiffView extends JComponent implements Scrollable {
       public void mouseMoved(MouseEvent e) {
         int right = hunkAtArrow(e.getX(), e.getY(), true);
         int left = right >= 0 ? -1 : hunkAtArrow(e.getX(), e.getY(), false);
+        // Cursor de redimensionar avisa que dá para arrastar; sem isso o divisor
+        // existe mas ninguém descobre.
+        setCursor(isOverSplitter(e.getX(), e.getY())
+            ? java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.E_RESIZE_CURSOR)
+            : java.awt.Cursor.getDefaultCursor());
         int hot = right >= 0 ? right : left;
         boolean toRight = right >= 0;
         if (hot != hotHunk || toRight != hotToRight) {
@@ -471,7 +540,13 @@ public final class DiffView extends JComponent implements Scrollable {
       }
 
       @Override
+      public void mouseReleased(MouseEvent e) {
+        draggingSplit = false;
+      }
+
+      @Override
       public void mouseExited(MouseEvent e) {
+        setCursor(java.awt.Cursor.getDefaultCursor());
         if (hotHunk >= 0) {
           hotHunk = -1;
           repaint();
@@ -480,6 +555,19 @@ public final class DiffView extends JComponent implements Scrollable {
     };
     addMouseListener(handler);
     addMouseMotionListener(handler);
+  }
+
+  /** {@code true} no espaço livre da coluna das setas — nem em cima de um
+   * triângulo de merge, nem do ↶ de desfazer. */
+  private boolean isOverSplitter(int x, int y) {
+    if (x < xArrow() || x > xArrow() + ARROW_W) {
+      return false;
+    }
+    if (hunkAtArrow(x, y, true) >= 0 || hunkAtArrow(x, y, false) >= 0) {
+      return false;
+    }
+    Rectangle undo = undoBounds();
+    return undo == null || !undo.contains(x, y);
   }
 
   private int rowAt(int y) {
@@ -666,10 +754,10 @@ public final class DiffView extends JComponent implements Scrollable {
     }
 
     paintGutter(g2, 0, row.oldLine(), gutterColor(row, true), y, baselineOffset);
-    paintText(g2, xTextLeft(), row.oldSegments(), bodyColor(row, true),
+    paintText(g2, xTextLeft(), leftTextWidth(), row.oldSegments(), bodyColor(row, true),
         palette.removeAccent(), y, baselineOffset);
     paintGutter(g2, xGutterRight(), row.newLine(), gutterColor(row, false), y, baselineOffset);
-    paintText(g2, xTextRight(), row.newSegments(), bodyColor(row, false),
+    paintText(g2, xTextRight(), rightTextWidth(), row.newSegments(), bodyColor(row, false),
         palette.addAccent(), y, baselineOffset);
   }
 
@@ -713,9 +801,8 @@ public final class DiffView extends JComponent implements Scrollable {
     }
   }
 
-  private void paintText(Graphics2D g2, int x, List<Segment> segments, Color bg, Color accent,
-      int y, int baselineOffset) {
-    int w = textWidth();
+  private void paintText(Graphics2D g2, int x, int w, List<Segment> segments, Color bg,
+      Color accent, int y, int baselineOffset) {
     g2.setColor(bg);
     g2.fillRect(x, y, w, rowHeight);
     if (segments == null) {

@@ -35,7 +35,8 @@ public final class Minimap extends JComponent {
     this.scroll = scroll;
     setPreferredSize(new Dimension(WIDTH, 10));
     setOpaque(true);
-    setToolTipText("Mapa do arquivo — clique para saltar");
+    setToolTipText("Mapa do arquivo — clique para ir até a diferença");
+    setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR));
     installMouse();
     // Repinta o indicador de posição enquanto o usuário rola.
     scroll.getVerticalScrollBar().addAdjustmentListener(e -> repaint());
@@ -57,8 +58,19 @@ public final class Minimap extends JComponent {
     addMouseMotionListener(handler);
   }
 
-  /** Centraliza a viewport na posição clicada (não alinha no topo: clicar numa
-   * marca perto do fim deixaria a marca fora da tela). */
+  /**
+   * Vai até a DIFERENÇA mais próxima do ponto clicado, selecionando o bloco —
+   * não apenas rolando até a posição proporcional.
+   *
+   * <p>Quem clica numa marca do mapa está apontando para uma mudança, não para
+   * uma coordenada. Rolar até a vizinhança deixava o bloco na tela mas sem
+   * seleção, então as setas de merge e o "próxima diferença" continuavam
+   * falando de outro bloco — o mapa levava o olho a um lugar e o teclado a
+   * outro.
+   *
+   * <p>Clique numa região sem marca nenhuma continua sendo rolagem simples: ali
+   * não há diferença para escolher.
+   */
   private void scrollToFraction(int y) {
     List<Row> rows = view.rows();
     if (rows.isEmpty() || getHeight() <= 0) {
@@ -66,6 +78,35 @@ public final class Minimap extends JComponent {
     }
     double fraction = Math.max(0, Math.min(1, (double) y / getHeight()));
     int row = (int) Math.round(fraction * (rows.size() - 1));
+
+    int hunk = nearestHunk(rows, row);
+    if (hunk >= 0) {
+      view.goToHunk(hunk);
+      return;
+    }
+    scrollToRow(rows, row);
+  }
+
+  /** Índice do bloco da row mais próxima que pertence a alguma mudança, ou -1
+   * quando não há nenhuma (arquivos iguais). Visível ao teste de propósito: é a
+   * função que decide para onde o clique vai. */
+  static int nearestHunk(List<Row> rows, int from) {
+    for (int distance = 0; distance < rows.size(); distance++) {
+      int before = from - distance;
+      int after = from + distance;
+      if (after < rows.size() && rows.get(after).hunkIndex() >= 0) {
+        return rows.get(after).hunkIndex();
+      }
+      if (before >= 0 && rows.get(before).hunkIndex() >= 0) {
+        return rows.get(before).hunkIndex();
+      }
+    }
+    return -1;
+  }
+
+  /** Centraliza a viewport na row (não alinha no topo: uma marca perto do fim
+   * ficaria fora da tela). */
+  private void scrollToRow(List<Row> rows, int row) {
     int rowHeight = view.rowHeight();
     Rectangle visible = scroll.getViewport().getViewRect();
     int top = row * rowHeight - visible.height / 2;

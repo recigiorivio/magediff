@@ -31,10 +31,10 @@ import javax.swing.JTextArea;
  */
 public final class StartScreen extends JPanel {
 
-  private static final int CARD_WIDTH = 300;
+  private static final int CARD_WIDTH = 268;
   private static final int CARD_HEIGHT = 190;
 
-  public StartScreen(Palette palette, Runnable onFiles, Runnable onGit) {
+  public StartScreen(Palette palette, Runnable onFiles, Runnable onFolders, Runnable onGit) {
     setLayout(new GridBagLayout());
     setBackground(palette.background());
 
@@ -51,6 +51,9 @@ public final class StartScreen extends JPanel {
     cards.add(new Card(palette, Icons.Glyph.TWO_FILES, "Comparar arquivos",
         "Dois arquivos lado a lado. Escolha, cole o caminho ou arraste para dentro.",
         onFiles), c);
+    cards.add(new Card(palette, Icons.Glyph.OPEN_RIGHT, "Comparar pastas",
+        "Duas pastas. Lista o que existe só de um lado e o que mudou nos dois.",
+        onFolders), c);
     cards.add(new Card(palette, Icons.Glyph.BRANCH, "Comparar repositório Git",
         "Abra uma pasta e compare o que está local contra um commit ou outra branch.",
         onGit), c);

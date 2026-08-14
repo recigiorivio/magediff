@@ -35,6 +35,8 @@ public final class EngineSmokeTest {
     contiguousBlocks();
     mergedRegionStaysVisible();
     gitMode();
+    minimapJump();
+    folderMode();
 
     if (failures > 0) {
       System.out.printf("%n%d verificação(ões) falharam%n", failures);
@@ -460,15 +462,15 @@ public final class EngineSmokeTest {
           GitRepo.Side work = GitRepo.Side.workingTree();
           GitRepo.Side head = GitRepo.Side.revision("HEAD", "HEAD");
 
-          List<GitRepo.ChangedFile> changes = repo.changes(head, work);
+          List<ChangedFile> changes = repo.changes(head, work);
           check("git: 3 arquivos diferem do HEAD (achou " + changes.size() + ")",
               changes.size() == 3);
           check("git: o inalterado NÃO está na lista",
               changes.stream().noneMatch(c -> c.path().equals("igual.txt")));
           check("git: classifica adicionado/removido/alterado",
-              kindOf(changes, "novo.txt") == GitRepo.ChangeKind.ADICIONADO
-                  && kindOf(changes, "sumiu.txt") == GitRepo.ChangeKind.REMOVIDO
-                  && kindOf(changes, "mudou.txt") == GitRepo.ChangeKind.ALTERADO);
+              kindOf(changes, "novo.txt") == ChangedFile.ChangeKind.ADICIONADO
+                  && kindOf(changes, "sumiu.txt") == ChangedFile.ChangeKind.REMOVIDO
+                  && kindOf(changes, "mudou.txt") == ChangedFile.ChangeKind.ALTERADO);
 
           // O conteúdo de cada lado é o que alimenta o diff.
           TextFile antes = repo.file(head, "mudou.txt");
@@ -502,14 +504,115 @@ public final class EngineSmokeTest {
     }
   }
 
-  private static GitRepo.ChangeKind kindOf(List<GitRepo.ChangedFile> changes, String path) {
-    return changes.stream().filter(c -> c.path().equals(path))
-        .map(GitRepo.ChangedFile::kind).findFirst().orElse(null);
+  /**
+   * Clicar no mapa lateral leva à DIFERENÇA mais próxima, não à posição
+   * proporcional. Sem isso o bloco ficava na tela mas sem seleção, e as setas de
+   * merge continuavam falando de outro bloco — o mapa levava o olho a um lugar e
+   * o teclado a outro.
+   */
+  private static void minimapJump() {
+    List<String> a = new ArrayList<>();
+    List<String> b = new ArrayList<>();
+    for (int i = 0; i < 30; i++) {
+      a.add("linha " + i);
+      b.add("linha " + i);
+    }
+    b.set(5, "CINCO alterada");
+    b.set(25, "VINTE E CINCO alterada");
+    Result r = DiffEngine.diff(a, b, false);
+    check("mapa: cenário com 2 blocos", r.hunks().size() == 2);
+
+    // Clique em cima da primeira mudança.
+    check("mapa: clique na row 5 vai para o bloco 0",
+        Minimap.nearestHunk(r.rows(), 5) == 0);
+    // Clique LONGE de tudo, mais perto do segundo bloco.
+    check("mapa: clique na row 22 vai para o bloco 1 (o mais próximo)",
+        Minimap.nearestHunk(r.rows(), 22) == 1);
+    // Clique no começo do arquivo, longe: pega o primeiro bloco.
+    check("mapa: clique na row 0 vai para o bloco 0",
+        Minimap.nearestHunk(r.rows(), 0) == 0);
+
+    Result iguais = DiffEngine.diff(a, new ArrayList<>(a), false);
+    check("mapa: sem nenhuma diferença, não há bloco para escolher",
+        Minimap.nearestHunk(iguais.rows(), 3) == -1);
+  }
+
+  /**
+   * Modo pasta, contra duas árvores de arquivos reais criadas em temporário.
+   * Cobre o que a comparação por pasta tem de próprio: correspondência por
+   * caminho relativo, subpasta, arquivo só de um lado, arquivo igual (que NÃO
+   * deve aparecer) e a exclusão de pastas como .git.
+   */
+  private static void folderMode() {
+    java.nio.file.Path a = null;
+    java.nio.file.Path b = null;
+    try {
+      a = java.nio.file.Files.createTempDirectory("pasta-a");
+      b = java.nio.file.Files.createTempDirectory("pasta-b");
+
+      write(a, "igual.txt", "mesma coisa\n");
+      write(b, "igual.txt", "mesma coisa\n");
+      write(a, "mudou.txt", "versao um\n");
+      write(b, "mudou.txt", "versao dois\n");
+      write(a, "so-na-esquerda.txt", "sozinho\n");
+      write(b, "so-na-direita.txt", "sozinho\n");
+
+      // Subpasta: a correspondência é pelo caminho relativo, não pelo nome.
+      java.nio.file.Files.createDirectories(a.resolve("sub"));
+      java.nio.file.Files.createDirectories(b.resolve("sub"));
+      write(a.resolve("sub"), "fundo.txt", "a\n");
+      write(b.resolve("sub"), "fundo.txt", "b\n");
+
+      // Mesmo TAMANHO e conteúdo diferente: o descarte por tamanho não pode
+      // concluir "igual" sozinho.
+      write(a, "mesmo-tamanho.txt", "AAAA\n");
+      write(b, "mesmo-tamanho.txt", "BBBB\n");
+
+      // Ruído que deve ficar fora.
+      java.nio.file.Files.createDirectories(a.resolve(".git"));
+      write(a.resolve(".git"), "HEAD", "ref: refs/heads/main\n");
+
+      List<ChangedFile> changes = new FolderPair(a, b).changes();
+      check("pasta: 5 diferenças (achou " + changes.size() + ")", changes.size() == 5);
+      check("pasta: arquivo idêntico não entra na lista",
+            changes.stream().noneMatch(c -> c.path().equals("igual.txt")));
+      check("pasta: só na esquerda = REMOVIDO",
+            kindOf(changes, "so-na-esquerda.txt") == ChangedFile.ChangeKind.REMOVIDO);
+      check("pasta: só na direita = ADICIONADO",
+            kindOf(changes, "so-na-direita.txt") == ChangedFile.ChangeKind.ADICIONADO);
+      check("pasta: conteúdo diferente = ALTERADO",
+            kindOf(changes, "mudou.txt") == ChangedFile.ChangeKind.ALTERADO);
+      check("pasta: mesmo tamanho com bytes diferentes é detectado",
+            kindOf(changes, "mesmo-tamanho.txt") == ChangedFile.ChangeKind.ALTERADO);
+      check("pasta: subpasta entra com o caminho relativo",
+            changes.stream().anyMatch(c -> c.path().replace('\\','/').equals("sub/fundo.txt")));
+      check("pasta: .git fica de fora",
+            changes.stream().noneMatch(c -> c.path().contains(".git")));
+
+      FolderPair pair = new FolderPair(a, b);
+      TextFile left = pair.file(true, "mudou.txt");
+      TextFile right = pair.file(false, "mudou.txt");
+      check("pasta: lê os dois lados", left != null && right != null);
+      check("pasta: os DOIS lados são graváveis (diferente do modo Git)",
+            !left.readOnly() && !right.readOnly());
+      check("pasta: lado inexistente devolve null",
+            pair.file(false, "so-na-esquerda.txt") == null);
+    } catch (Exception e) {
+      check("pasta: " + e, false);
+    } finally {
+      deleteTree(a);
+      deleteTree(b);
+    }
   }
 
   private static void write(java.nio.file.Path dir, String name, String content)
       throws java.io.IOException {
     java.nio.file.Files.writeString(dir.resolve(name), content);
+  }
+
+  private static ChangedFile.ChangeKind kindOf(List<ChangedFile> changes, String path) {
+    return changes.stream().filter(c -> c.path().equals(path))
+        .map(ChangedFile::kind).findFirst().orElse(null);
   }
 
   private static void deleteTree(java.nio.file.Path dir) {

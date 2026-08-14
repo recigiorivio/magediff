@@ -15,7 +15,6 @@ import javax.swing.JList;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 import javax.swing.ListSelectionModel;
-import br.com.rivio.magediff.GitRepo.ChangedFile;
 
 /**
  * Lista dos arquivos que diferem entre os dois lados, no modo Git.
@@ -30,6 +29,9 @@ public final class ChangedFilesList extends JPanel {
   private final DefaultListModel<ChangedFile> model = new DefaultListModel<>();
   private final JList<ChangedFile> list = new JList<>(model);
   private final JLabel summary = new JLabel();
+  /** No modo pasta, quais são as duas raízes. No modo Git fica escondido: os dois
+   * lados já estão nos combos do cabeçalho. */
+  private final JLabel roots = new JLabel();
 
   public ChangedFilesList(Palette palette, Consumer<ChangedFile> onSelect) {
     this.palette = palette;
@@ -40,7 +42,16 @@ public final class ChangedFilesList extends JPanel {
     summary.setFont(summary.getFont().deriveFont(Font.BOLD, 11f));
     summary.setForeground(palette.muted());
     summary.setBorder(BorderFactory.createEmptyBorder(8, 10, 8, 10));
-    add(summary, BorderLayout.NORTH);
+    roots.setFont(roots.getFont().deriveFont(Font.PLAIN, 10.5f));
+    roots.setForeground(palette.muted());
+    roots.setBorder(BorderFactory.createEmptyBorder(0, 10, 6, 10));
+    roots.setVisible(false);
+    JPanel top = new JPanel();
+    top.setOpaque(false);
+    top.setLayout(new javax.swing.BoxLayout(top, javax.swing.BoxLayout.Y_AXIS));
+    top.add(summary);
+    top.add(roots);
+    add(top, BorderLayout.NORTH);
 
     list.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
     list.setBackground(palette.background());
@@ -68,6 +79,26 @@ public final class ChangedFilesList extends JPanel {
     if (!files.isEmpty()) {
       list.setSelectedIndex(0);
     }
+  }
+
+  /** Mostra as duas raízes da comparação por pasta. {@code null} esconde. */
+  public void setRoots(String left, String right) {
+    if (left == null) {
+      roots.setVisible(false);
+      return;
+    }
+    // Só o NOME de cada pasta: o caminho inteiro não cabe em 260 px e o corte
+    // comia justamente o fim, que é a parte que identifica. O caminho completo
+    // fica na dica de contexto.
+    roots.setText("<html>◧ " + lastSegment(left) + "<br>◨ " + lastSegment(right) + "</html>");
+    roots.setToolTipText("<html>" + left + "<br>" + right + "</html>");
+    roots.setVisible(true);
+  }
+
+  private static String lastSegment(String path) {
+    String cleaned = path.endsWith("/") ? path.substring(0, path.length() - 1) : path;
+    int slash = cleaned.lastIndexOf('/');
+    return slash < 0 ? cleaned : cleaned.substring(slash + 1);
   }
 
   public void clearSelection() {
@@ -103,7 +134,7 @@ public final class ChangedFilesList extends JPanel {
               + "&nbsp;&nbsp;<span style='color:rgb(%d,%d,%d)'>%s</span></html>",
           markColor.getRed(), markColor.getGreen(), markColor.getBlue(), mark, name,
           folderColor.getRed(), folderColor.getGreen(), folderColor.getBlue(), folder));
-      setToolTipText(file.kind() == GitRepo.ChangeKind.RENOMEADO
+      setToolTipText(file.kind() == ChangedFile.ChangeKind.RENOMEADO
           ? file.oldPath() + "  →  " + file.path() : file.path());
       setFont(getFont().deriveFont(Font.PLAIN, 11.5f));
       setBorder(BorderFactory.createEmptyBorder(2, 8, 2, 6));

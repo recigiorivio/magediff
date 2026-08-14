@@ -32,7 +32,7 @@ public final class Icons {
     CLIPBOARD_COPY, CLIPBOARD_PASTE,
     SWAP, RELOAD,
     SAVE_LEFT, SAVE_RIGHT, SAVE,
-    COLLAPSE, WHITESPACE, BRANCH, TWO_FILES
+    COLLAPSE, WHITESPACE, BRANCH, TWO_FILES, HOME
   }
 
   private Icons() {
@@ -72,6 +72,7 @@ public final class Icons {
       case WHITESPACE -> whitespace(g);
       case BRANCH -> branch(g);
       case TWO_FILES -> twoFiles(g);
+      case HOME -> home(g);
     }
   }
 
@@ -212,6 +213,18 @@ public final class Icons {
     for (double x = 3; x < 13; x += 3) {
       g.draw(new java.awt.geom.Line2D.Double(x, 8, x + 1.6, 8));
     }
+  }
+
+  /** Casinha: voltar à tela inicial. É o desenho que qualquer um lê como
+   * "início" sem precisar de rótulo. */
+  private static void home(Graphics2D g) {
+    java.awt.geom.Path2D.Double roof = new java.awt.geom.Path2D.Double();
+    roof.moveTo(1.8, 7.6);
+    roof.lineTo(8, 2.2);
+    roof.lineTo(14.2, 7.6);
+    g.draw(roof);
+    g.draw(new java.awt.geom.Rectangle2D.Double(3.6, 7.6, 8.8, 6.2));
+    g.draw(new java.awt.geom.Rectangle2D.Double(6.6, 10, 2.8, 3.8));
   }
 
   /** Dois pontos numa linha e um terceiro derivando: o desenho de branch que

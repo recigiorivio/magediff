@@ -118,6 +118,13 @@ parsear de volta.
 `MageDiffApp`; se a checagem sumisse, o merge alteraria só a memória e sumiria no
 clique seguinte, dando a impressão de que foi aplicado.
 
+**Branch e commit são listas SEPARADAS no `GitHeader`.** Num combo só, o item
+que interessa ficaria sempre no meio de dezenas que não interessam. O `Side`
+carrega o `CommitInfo` junto quando é commit, para o quadro de detalhes não ter
+que consultar o repositório a cada troca de seleção. Teto de
+`GitHeader.MAX_COMMITS` na lista: o combo é para escolher entre os recentes, não
+para navegar a história inteira.
+
 **`--git <pasta>` abre o modo Git sem diálogo.** Existe para o terminal e porque
 o teste visual não pode parar num seletor de arquivos.
 
@@ -125,6 +132,38 @@ o teste visual não pode parar num seletor de arquivos.
 Com o 2.x o binding é por ServiceLoader e o 1.7 procura
 `org.slf4j.impl.StaticLoggerBinder` — versões cruzadas fazem o NOP não ligar, e o
 aviso aparece no console assim mesmo. Aconteceu.
+
+**`ChangedFile` é top-level, não aninhado no `GitRepo`.** Ele serve aos dois
+modos que listam arquivos; enquanto era tipo interno do Git, comparar pastas
+exigiria duplicar o registro ou importar o modo Git para dentro de um lugar que
+não tem nada com Git.
+
+**No modo pasta os DOIS lados são graváveis** — diferente do Git, onde a revisão
+é imutável. É o modo em que o merge bidirecional faz mais sentido.
+
+**`FolderPair` ignora por SEGMENTO do caminho**, não por prefixo: `node_modules`
+aninhado três níveis abaixo também fica fora. E o teste de diferença compara
+TAMANHO primeiro — descarte barato que resolve a maioria dos casos sem ler byte;
+`Files.mismatch` só entra quando os tamanhos batem.
+
+**A largura das colunas é ajustável** (`DiffView.splitRatio`), com o espaço vazio
+da coluna das setas servindo de divisor. Começou fixa em 50/50 com a justificativa
+de que larguras diferentes atrapalham a comparação — o que continua sendo o
+padrão. Mas com um lado de linhas longas, insistir no meio a meio obriga a rolar
+na horizontal para ler o que caberia de graça. A barra horizontal usa a MENOR das
+duas larguras, senão a coluna estreita não alcança o fim da linha mais longa.
+
+**O trabalho pesado sai da EDT, e a tela de espera é a MESMA mudança.** Varrer
+pastas ou repositório na thread da interface faz a janela parar de repintar — e aí
+o próprio "carregando" não apareceria, porque quem desenha é a thread bloqueada.
+`background(...)` roda em `SwingWorker` e o `LoadingCard` entra por um `Timer` de
+150 ms: se o trabalho acabar antes, ele nunca aparece (sem isso, pisca em toda
+troca de arquivo pequeno).
+
+⚠️ **Isso quebrou o `--render`**: com abertura assíncrona, pintar de imediato
+capturava a tela de espera. O render agora espera `showingDiff()` (teto de 30 s)
+antes de pintar. Qualquer coisa nova que abra comparação em background precisa
+respeitar esse contrato.
 
 ## Verificação sem clicar
 

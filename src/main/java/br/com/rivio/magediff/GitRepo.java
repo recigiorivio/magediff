@@ -41,14 +41,21 @@ public final class GitRepo implements AutoCloseable {
    * Um dos dois lados da comparação. {@code rev} nulo significa "a pasta de
    * trabalho como está agora" — o único lado que se pode gravar.
    */
-  public record Side(String label, String rev) {
+  public record Side(String label, String rev, CommitInfo commit) {
 
     public static Side workingTree() {
-      return new Side("Pasta de trabalho", null);
+      return new Side("Pasta de trabalho", null, null);
     }
 
     public static Side revision(String label, String rev) {
-      return new Side(label, rev);
+      return new Side(label, rev, null);
+    }
+
+    /** Lado que é um commit específico. Carrega o {@link CommitInfo} junto para
+     * a tela poder mostrar mensagem, autor e data sem consultar o repositório de
+     * novo a cada troca de seleção. */
+    public static Side commit(CommitInfo info) {
+      return new Side(info.shortId() + "  " + info.summary(), info.id(), info);
     }
 
     public boolean isWorkingTree() {
@@ -61,18 +68,9 @@ public final class GitRepo implements AutoCloseable {
     }
   }
 
-  public enum ChangeKind {
-    ADICIONADO, REMOVIDO, ALTERADO, RENOMEADO
-  }
-
-  /** Um arquivo que difere entre os dois lados. {@code oldPath} só difere de
-   * {@code path} em renomeação. */
-  public record ChangedFile(String path, String oldPath, ChangeKind kind) {
-
-    @Override
-    public String toString() {
-      return path;
-    }
+  /** Um commit, com o que a tela precisa mostrar. */
+  public record CommitInfo(String id, String shortId, String summary, String fullMessage,
+      String author, String email, java.time.Instant date) {
   }
 
   private final Repository repository;
@@ -133,6 +131,34 @@ public final class GitRepo implements AutoCloseable {
   }
 
   /**
+   * Os últimos commits da branch atual, do mais novo para o mais velho.
+   *
+   * <p>Tem limite porque a lista alimenta um combo: repositório com 40 mil
+   * commits transformaria a escolha num scroll infinito, e quem quer um commit
+   * antigo tem o campo de busca do git para achar o hash.
+   */
+  public List<CommitInfo> commits(int limit) throws Exception {
+    List<CommitInfo> out = new ArrayList<>();
+    if (repository.resolve(Constants.HEAD) == null) {
+      return out;
+    }
+    try (Git git = new Git(repository)) {
+      for (org.eclipse.jgit.revwalk.RevCommit commit : git.log().setMaxCount(limit).call()) {
+        org.eclipse.jgit.lib.PersonIdent who = commit.getAuthorIdent();
+        out.add(new CommitInfo(
+            commit.getName(),
+            commit.getName().substring(0, 7),
+            commit.getShortMessage(),
+            commit.getFullMessage().trim(),
+            who == null ? "(sem autor)" : who.getName(),
+            who == null ? "" : who.getEmailAddress(),
+            who == null ? null : who.getWhenAsInstant()));
+      }
+    }
+    return out;
+  }
+
+  /**
    * Arquivos que diferem entre os dois lados.
    *
    * <p>Detecção de renomeação ligada: sem ela, mover um arquivo aparece como uma
@@ -157,10 +183,10 @@ public final class GitRepo implements AutoCloseable {
 
   private static ChangedFile toChangedFile(DiffEntry entry) {
     return switch (entry.getChangeType()) {
-      case ADD -> new ChangedFile(entry.getNewPath(), entry.getNewPath(), ChangeKind.ADICIONADO);
-      case DELETE -> new ChangedFile(entry.getOldPath(), entry.getOldPath(), ChangeKind.REMOVIDO);
-      case RENAME -> new ChangedFile(entry.getNewPath(), entry.getOldPath(), ChangeKind.RENOMEADO);
-      default -> new ChangedFile(entry.getNewPath(), entry.getOldPath(), ChangeKind.ALTERADO);
+      case ADD -> new ChangedFile(entry.getNewPath(), entry.getNewPath(), ChangedFile.ChangeKind.ADICIONADO);
+      case DELETE -> new ChangedFile(entry.getOldPath(), entry.getOldPath(), ChangedFile.ChangeKind.REMOVIDO);
+      case RENAME -> new ChangedFile(entry.getNewPath(), entry.getOldPath(), ChangedFile.ChangeKind.RENOMEADO);
+      default -> new ChangedFile(entry.getNewPath(), entry.getOldPath(), ChangedFile.ChangeKind.ALTERADO);
     };
   }
 
@@ -203,8 +229,11 @@ public final class GitRepo implements AutoCloseable {
       repository.open(treeWalk.getObjectId(0)).copyTo(buffer);
       // Nome com a revisão junto: na tela, "config.xml" dos dois lados não diz
       // qual é qual, e é o tipo de confusão que faz gravar por cima do errado.
+      // Só o hash curto — o rótulo do lado carrega a mensagem inteira do commit
+      // e enchia a barra de status com um parágrafo.
+      String revLabel = side.commit() != null ? side.commit().shortId() : side.label();
       return TextFile.ofBytes(buffer.toByteArray(), StandardCharsets.UTF_8,
-          path + " @ " + side.label());
+          path + " @ " + revLabel);
     }
   }
 
