@@ -662,10 +662,15 @@ public final class MageDiffApp extends JFrame {
     // barra em toda comparação normal treina o olho a não ler a barra.
     String minor = result.minor() == 0 ? ""
         : String.format("   ·   %d só de espaço", result.minor());
-    status.setText(String.format("+%d  −%d%s   ·   %s   ·   %s: %s%s   ·   %s: %s%s",
-        result.added(), result.removed(), minor, position,
-        left.name(), left.eolLabel(), left.bom() ? " + BOM" : "",
-        right.name(), right.eolLabel(), right.bom() ? " + BOM" : ""));
+    if (!left.loaded() && !right.loaded() && left.readOnly() == right.readOnly()) {
+      // Nada aberto: repetir "(sem arquivo): LF" dos dois lados só enche a barra.
+      status.setText(position);
+    } else {
+      status.setText(String.format("+%d  −%d%s   ·   %s   ·   %s: %s%s   ·   %s: %s%s",
+          result.added(), result.removed(), minor, position,
+          left.name(), left.eolLabel(), left.bom() ? " + BOM" : "",
+          right.name(), right.eolLabel(), right.bom() ? " + BOM" : ""));
+    }
     warning.setText(buildWarning());
     saveLeftItem.setEnabled(left.dirty());
     saveRightItem.setEnabled(right.dirty());
@@ -736,6 +741,8 @@ public final class MageDiffApp extends JFrame {
   /** Modo arquivo: a tela que já existia, com a barra de caminhos. */
   private void startFileMode() {
     closeRepo();
+    view.setEmptyMessage("Nenhum arquivo aberto\n"
+        + "Use as pastinhas acima, cole um caminho, ou arraste os arquivos para cá");
     filesList.setVisible(false);
     scroll.setColumnHeaderView(pathBar);
     cards.show(root, "diff");
@@ -793,7 +800,16 @@ public final class MageDiffApp extends JFrame {
       return;
     }
     try {
-      filesList.setFiles(repo.changes(gitHeader.from(), gitHeader.to()));
+      List<GitRepo.ChangedFile> changes = repo.changes(gitHeader.from(), gitHeader.to());
+      if (changes.isEmpty()) {
+        left = TextFile.empty();
+        right = TextFile.empty();
+        view.setEmptyMessage("Nenhuma diferença entre os dois lados\n"
+            + gitHeader.from().label() + "  e  " + gitHeader.to().label()
+            + " estão iguais — troque um dos lados acima");
+        recompute();
+      }
+      filesList.setFiles(changes);
       setTitle("MageDiff — " + repo.workTree().getFileName());
     } catch (Exception e) {
       JOptionPane.showMessageDialog(this, "Não foi possível comparar:\n" + e.getMessage(),
@@ -817,6 +833,7 @@ public final class MageDiffApp extends JFrame {
       // não diz nada, "(não existe em HEAD)" explica o lado todo cinza.
       left = a != null ? a : absent(gitHeader.from());
       right = b != null ? b : absent(gitHeader.to());
+      view.setEmptyMessage("Este arquivo é igual nos dois lados");
       history.clear();
       view.clearSelection();
       clearTrail();

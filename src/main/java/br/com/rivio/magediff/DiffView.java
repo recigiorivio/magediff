@@ -73,6 +73,10 @@ public final class DiffView extends JComponent implements Scrollable {
   private int currentHunk = -1;
   private int hotHunk = -1;
   private boolean hotToRight;
+  /** Texto mostrado quando não há nenhuma linha para desenhar. Sem ele, "nada a
+   * comparar" e "quebrou" ficam com exatamente a mesma aparência: duas colunas
+   * em branco. */
+  private String emptyMessage = "";
   private Side selSide;
   private int selAnchor = -1;
   private int selFocus = -1;
@@ -138,6 +142,11 @@ public final class DiffView extends JComponent implements Scrollable {
 
   public void setSelectionListener(Runnable listener) {
     this.selectionListener = listener;
+  }
+
+  public void setEmptyMessage(String message) {
+    this.emptyMessage = message == null ? "" : message;
+    repaint();
   }
 
   public void setPalette(Palette palette) {
@@ -537,6 +546,11 @@ public final class DiffView extends JComponent implements Scrollable {
     g2.fillRect(clip.x, clip.y, clip.width, clip.height);
 
     List<Row> rows = result.rows();
+    if (rows.isEmpty()) {
+      paintEmptyState(g2);
+      g2.dispose();
+      return;
+    }
     int firstRow = Math.max(0, clip.y / rowHeight);
     int lastRow = Math.min(rows.size() - 1, (clip.y + clip.height) / rowHeight);
     FontMetrics fm = g2.getFontMetrics();
@@ -615,6 +629,27 @@ public final class DiffView extends JComponent implements Scrollable {
     g2.fillRect(x, y, w, h);
     g2.setColor(base);
     g2.drawRect(x, y, w, h - 1);
+  }
+
+  /** Mensagem centralizada, em duas linhas: o que está acontecendo e o que fazer.
+   * A segunda linha existe porque "nenhuma diferença" sozinho não diz se o
+   * usuário deve mexer em algo. */
+  private void paintEmptyState(Graphics2D g2) {
+    if (emptyMessage.isEmpty()) {
+      return;
+    }
+    String[] parts = emptyMessage.split("\n", 2);
+    g2.setFont(getFont().deriveFont(Font.PLAIN, 15f));
+    FontMetrics fm = g2.getFontMetrics();
+    int y = getHeight() / 3;
+    g2.setColor(palette.text());
+    g2.drawString(parts[0], (getWidth() - fm.stringWidth(parts[0])) / 2, y);
+    if (parts.length > 1) {
+      g2.setFont(getFont().deriveFont(Font.PLAIN, 12f));
+      FontMetrics small = g2.getFontMetrics();
+      g2.setColor(palette.muted());
+      g2.drawString(parts[1], (getWidth() - small.stringWidth(parts[1])) / 2, y + 26);
+    }
   }
 
   private void paintRow(Graphics2D g2, Row row, int rowIndex, int y, int baselineOffset) {
