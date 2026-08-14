@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="conta">
+
+  <select id="findByAtendimento" parameterType="java.util.Map" resultMap="contaResultMap">
+    SELECT c.nr_interno_conta   AS "internoConta",
+           c.nr_atendimento     AS "numeroAtendimento",
+           c.dt_periodo_inicial AS "dataInicio",
+           c.dt_periodo_final   AS "dataFim",
+           c.ie_status_acerto   AS "status"
+      FROM tasy.conta_paciente c
+     WHERE c.nr_atendimento = #{numeroAtendimento}
+       AND c.ie_status_acerto = 1
+     ORDER BY c.dt_periodo_inicial
+  </select>
+
+  <select id="listarPacotes" parameterType="java.util.Map" resultType="map">
+    SELECT p.cd_pacote AS "codigo",
+           p.ds_pacote AS "descricao"
+      FROM tasy.pacote_exame p
+     WHERE p.ie_situacao = 'A'
+  </select>
+
+  <insert id="gravarAuditoria" parameterType="java.util.Map">
+    INSERT INTO tasy.auditoria_conta
+      (nr_sequencia, nr_interno_conta, ds_observacao)
+    VALUES
+      (tasy.auditoria_conta_seq.NEXTVAL, #{internoConta}, #{observacao})
+  </insert>
+
+</mapper>

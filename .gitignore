@@ -1,0 +1,13 @@
+# Saída de build. Contém também target/demo, onde ficam CÓPIAS de arquivos reais
+# usados em teste (mappings de cliente) — não podem ir para um repo público.
+target/
+
+# Ícones derivados do logo.jpg pelo tools/PrepIcon.java. A fonte é o .jpg;
+# os dois scripts de empacotamento regeneram quando faltam.
+src/main/resources/logo.png
+src/main/resources/logo.ico
+
+# macOS / editores
+.DS_Store
+*.iml
+.idea/
